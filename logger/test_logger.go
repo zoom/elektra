@@ -1,0 +1,190 @@
+package logger
+
+import (
+	"context"
+	"fmt"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/keybase/go-logging"
+)
+
+// TestLogBackend is an interface for logging to a test object (i.e.,
+// a *testing.T).  We define this in order to avoid pulling in the
+// "testing" package in exported code.
+type TestLogBackend interface {
+	Error(args ...interface{})
+	Errorf(format string, args ...interface{})
+	Fatal(args ...interface{})
+	Fatalf(format string, args ...interface{})
+	Log(args ...interface{})
+	Logf(format string, args ...interface{})
+	Failed() bool
+	Name() string
+}
+
+// TestLogger is a Logger that writes to a TestLogBackend.  All
+// messages except Fatal are printed using Logf, to avoid failing a
+// test that is trying to test an error condition.  No context tags
+// are logged.
+type TestLogger struct {
+	log        TestLogBackend
+	extraDepth int
+	sync.Mutex
+}
+
+func NewTestLogger(log TestLogBackend) *TestLogger {
+	return &TestLogger{log: log}
+}
+
+// Verify TestLogger fully implements the Logger interface.
+var _ Logger = (*TestLogger)(nil)
+
+// Whether "TEST FAILED" has output for a particular test is stored globally.
+// Because some tests use multiple instances of TestLogger so storing
+// it there would result in multiple "TEST FAILED" per test.
+// This way has the drawback that when two tests in different packages
+// share a name, only one of their "TEST FAILED" will print.
+var globalFailReportedLock sync.Mutex
+var globalFailReported = make(map[string]struct{})
+
+// ctx can be `nil`
+func (log *TestLogger) common(ctx context.Context, lvl logging.Level, useFatal bool, fmts string, arg ...interface{}) {
+
+	if log.log.Failed() {
+		globalFailReportedLock.Lock()
+		name := log.log.Name()
+		if _, reported := globalFailReported[name]; !reported {
+			log.log.Logf("TEST FAILED: %s", name)
+			globalFailReported[name] = struct{}{}
+		}
+		globalFailReportedLock.Unlock()
+	}
+
+	if ctx != nil {
+		if useFatal {
+			log.log.Fatalf(prepareString(ctx,
+				log.prefixCaller(log.extraDepth, lvl, fmts)), arg...)
+		} else {
+			log.log.Logf(prepareString(ctx,
+				log.prefixCaller(log.extraDepth, lvl, fmts)), arg...)
+		}
+	} else {
+		if useFatal {
+			log.log.Fatalf(log.prefixCaller(log.extraDepth, lvl, fmts), arg...)
+		} else {
+			log.log.Logf(log.prefixCaller(log.extraDepth, lvl, fmts), arg...)
+		}
+	}
+}
+
+func (log *TestLogger) prefixCaller(extraDepth int, lvl logging.Level, fmts string) string {
+	// The testing library doesn't let us control the stack depth,
+	// and it always prints out its own prefix, so use \r to clear
+	// it out (at least on a terminal) and do our own formatting.
+	_, file, line, _ := runtime.Caller(3 + extraDepth)
+	elements := strings.Split(file, "/")
+	failed := ""
+	if log.log.Failed() {
+		failed = "[X] "
+	}
+
+	fileLine := fmt.Sprintf("%s:%d", elements[len(elements)-1], line)
+	return fmt.Sprintf("\r%s %s%-23s: [%.1s] %s", time.Now().Format("2006-01-02 15:04:05.00000"),
+		failed, fileLine, lvl, fmts)
+}
+
+func (log *TestLogger) Debug(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.DEBUG, false, fmts, arg...)
+}
+
+func (log *TestLogger) CDebugf(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.DEBUG, false, fmts, arg...)
+}
+
+func (log *TestLogger) Info(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.INFO, false, fmts, arg...)
+}
+
+func (log *TestLogger) CInfof(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.INFO, false, fmts, arg...)
+}
+
+func (log *TestLogger) Notice(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.NOTICE, false, fmts, arg...)
+}
+
+func (log *TestLogger) CNoticef(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.NOTICE, false, fmts, arg...)
+}
+
+func (log *TestLogger) Warning(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.WARNING, false, fmts, arg...)
+}
+
+func (log *TestLogger) CWarningf(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.WARNING, false, fmts, arg...)
+}
+
+func (log *TestLogger) Error(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.ERROR, false, fmts, arg...)
+}
+
+func (log *TestLogger) Errorf(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.ERROR, false, fmts, arg...)
+}
+
+func (log *TestLogger) CErrorf(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.ERROR, false, fmts, arg...)
+}
+
+func (log *TestLogger) Critical(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.CRITICAL, false, fmts, arg...)
+}
+
+func (log *TestLogger) CCriticalf(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.CRITICAL, false, fmts, arg...)
+}
+
+func (log *TestLogger) Fatalf(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.CRITICAL, true, fmts, arg...)
+}
+
+func (log *TestLogger) CFatalf(ctx context.Context, fmts string,
+	arg ...interface{}) {
+	log.common(ctx, logging.CRITICAL, true, fmts, arg...)
+}
+
+func (log *TestLogger) Profile(fmts string, arg ...interface{}) {
+	log.common(context.TODO(), logging.CRITICAL, false, fmts, arg...)
+}
+
+func (log *TestLogger) Configure(style string, debug bool, filename string) {
+	// no-op
+}
+
+func (log *TestLogger) CloneWithAddedDepth(depth int) Logger {
+	log.Lock()
+	defer log.Unlock()
+	var clone TestLogger
+	clone.log = log.log
+	clone.extraDepth = log.extraDepth + depth
+	return &clone
+}
+
+func stringListContains(s string, a []string) bool {
+	for _, t := range a {
+		if s == t {
+			return true
+		}
+	}
+	return false
+}
