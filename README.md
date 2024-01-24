@@ -1,6 +1,7 @@
 # MVKD Implementation
 
 This is a sample implementation of the MVKD construction ELEKTRA. Both server and client are written in Go.
+This is an academic prototype not intended for production use.
 
 ## Outline
 
